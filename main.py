@@ -110,7 +110,7 @@ def run_tsne(data, anomaly, counter_examples, output_file_name):
     plt.savefig(output_file_name, format='png', dpi=300)
 
     # Show the plot
-    plt.show()
+    # plt.show()
 
 
 def run_tsne_new(data, anomaly, counter_examples):
@@ -183,44 +183,41 @@ original_data = dataframe_container.original_df
 anomaly = dataframe_container.anomalies.iloc[0]
 anomaly = anomaly.to_frame().T
 cols_names = dataframe_container.cols_names
-num_samples = (dataframe_container.rows_amount * dataframe_container.cols_amount) // 5
+num_samples = (dataframe_container.rows_amount * dataframe_container.cols_amount) // 3
 pd.set_option('display.max_columns', None)      # Ensure all columns are displayed
+anomaly_vec = anomaly.to_numpy().flatten()  # Ensure anomaly is a 1D array
 
-# ----------------------------------- - Anomaly ------------------------------------
-anomaly_original_row = dataframe_container.original_df.loc[anomaly.index]
-print(f"Anomaly:\n{anomaly_original_row}\n")
-
+# Start overall timer
+overall_start = time.perf_counter()
 # ------------------------------------ Brute Force ------------------------------------
-start = time.time()
-best_subsets["Brute Force"] = brute_force.get_sub_dfs(df=data, anomaly=anomaly, top_n=constants.SUBSETS_AMOUNT)
-brute_force_counter_examples = best_subsets["Brute Force"][0]
-analyze_counter_examples(counter_examples=brute_force_counter_examples, method_name="Brute Force")
-end = time.time()
-brute_force_idxs = brute_force_counter_examples.subset.index
-brute_force_original_values_subset = original_data.loc[brute_force_idxs]
-brute_force_original_values_subset.to_csv("Results/Brute Force/Counterexamples", index=False)
-print("Execution time for Brute Force: ", end - start, "seconds")
-
-# Ensure anomaly is a 1D array
-anomaly_vec = anomaly.to_numpy().flatten()
-
-# Ensure all x values are also 1D arrays
-distances = [math.dist(anomaly_vec, x.to_numpy()) for _, x in brute_force_original_values_subset.iterrows()]
-avg_distance = sum(distances) / len(distances)
-print("Average Euclidean distance:", avg_distance)
+# start = time.perf_counter()
+# best_subsets["Brute Force"] = brute_force.get_sub_dfs(df=data, anomaly=anomaly, top_n=constants.SUBSETS_AMOUNT)
+# brute_force_counter_examples = best_subsets["Brute Force"][0]
+# analyze_counter_examples(counter_examples=brute_force_counter_examples, method_name="Brute Force")
+# brute_force_idxs = brute_force_counter_examples.subset.index
+# brute_force_original_values_subset = original_data.loc[brute_force_idxs]
+# brute_force_original_values_subset.to_csv("Results/Brute Force/Counterexamples", index=False)
+# end = time.perf_counter()
+# brute_force_time = end - start
+# print(f"Brute Force algorithm completed in {brute_force_time:.4f} seconds")
+#
+# # Ensure all x values are also 1D arrays
+# distances = [math.dist(anomaly_vec, x.to_numpy()) for _, x in brute_force_original_values_subset.iterrows()]
+# avg_distance = sum(distances) / len(distances)
+# print("Average Euclidean distance:", avg_distance)
 
 # ------------------------------------ Monte Carlo ------------------------------------
-start = time.time()
+start = time.perf_counter()
 best_subsets["Monte Carlo"] = monte_carlo.get_sub_dfs(df=data, anomaly=anomaly, top_n=constants.SUBSETS_AMOUNT, num_samples=num_samples)
 monte_carlo_counter_examples = best_subsets["Monte Carlo"][0]
 analyze_counter_examples(counter_examples=monte_carlo_counter_examples, method_name="Monte Carlo")
-end = time.time()
 monte_carlo_idxs = monte_carlo_counter_examples.subset.index
 monte_carlo_original_values_subset = original_data.loc[monte_carlo_idxs]
 monte_carlo_original_values_subset.to_csv("Results/Brute Force/Counterexamples", index=False)
-# run_tsne_new(data, anomaly,
-# monte_carlo_counter_examples.subset)
-print("Execution time for Monte Carlo: ", end - start, "seconds")
+
+end = time.perf_counter()
+monte_carlo_time = end - start
+print(f"Monte Carlo algorithm completed in {monte_carlo_time:.4f} seconds")
 
 # Ensure all x values are also 1D arrays
 distances = [math.dist(anomaly_vec, x.to_numpy()) for _, x in monte_carlo_original_values_subset.iterrows()]
@@ -228,19 +225,36 @@ avg_distance = sum(distances) / len(distances)
 print("Average Euclidean distance:", avg_distance)
 
 # ------------------------------------ Genetic Algorithm ------------------------------------
-start = time.time()
+start = time.perf_counter()
 best_subsets["Genetic"] = genetic.get_sub_dfs(df=data, anomaly=anomaly, top_n=constants.SUBSETS_AMOUNT)
 genetic_counter_examples = best_subsets["Genetic"][0]
 # counter_examples = pd.concat([container.subset for container in best_subsets["Genetic"]], ignore_index=True)
 # genetic_subset_container = SubsetContainer(subset=counter_examples, anomaly=anomaly, sim_features_amount=constants.MAX_COLS_AMOUNT)
 analyze_counter_examples(counter_examples=genetic_counter_examples, method_name="Genetic")
-end = time.time()
 genetic_idxs = genetic_counter_examples.subset.index
 genetic_original_values_subset = original_data.loc[genetic_idxs]
 genetic_original_values_subset.to_csv("Results/Genetic/Counterexamples", index=False)
-print("Execution time for Genetic Algorithm: ", end - start, "seconds")
 
+end = time.perf_counter()
+genetic_time = end - start
+print(f"Genetic algorithm completed in {genetic_time:.4f} seconds")
 # Ensure all x values are also 1D arrays
 distances = [math.dist(anomaly_vec, x.to_numpy()) for _, x in genetic_original_values_subset.iterrows()]
+avg_distance = sum(distances) / len(distances)
+print("Average Euclidean distance:", avg_distance)
+
+# ------------------------------------ Multi-Armed Bandit ------------------------------------
+start = time.time()
+best_subsets["Multi Arm-Bandit"] = mab.get_sub_dfs(df=data, anomaly=anomaly, top_n=constants.SUBSETS_AMOUNT, num_samples=num_samples)
+mab_counter_examples = best_subsets["Multi Arm-Bandit"][0]
+analyze_counter_examples(counter_examples=mab_counter_examples, method_name="Multi Arm-Bandit")
+end = time.time()
+mab_idxs = mab_counter_examples.subset.index
+mab_original_values_subset = original_data.loc[mab_idxs]
+mab_original_values_subset.to_csv("Results/Multi Arm-Bandit/Counterexamples", index=False)
+print("Execution time for Multi Arm-Bandit: ", end - start, "seconds")
+
+# Ensure all x values are also 1D arrays
+distances = [math.dist(anomaly_vec, x.to_numpy()) for _, x in mab_original_values_subset.iterrows()]
 avg_distance = sum(distances) / len(distances)
 print("Average Euclidean distance:", avg_distance)
