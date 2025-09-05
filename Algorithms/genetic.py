@@ -1,8 +1,6 @@
 from Utilities.SubsetContainer import SubsetContainer
-import pandas as pd
 from Utilities import Constants as util
 import random
-from datetime import datetime
 import numpy as np
 
 
@@ -26,34 +24,154 @@ class Chromosome:
 
 def create_random_chromosome(total_rows, total_cols):
     """Create a random valid chromosome."""
-    # Random number of rows and columns within constraints
+    r = random.randint(util.MIN_ROWS_AMOUNT, min(util.MAX_ROWS_AMOUNT, total_rows))
+    c = random.randint(util.MIN_COLS_AMOUNT, min(util.MAX_COLS_AMOUNT, total_cols))
+    rows = random.sample(range(total_rows), r)
+    return Chromosome(rows, c, total_rows, total_cols)
+
+
+def create_distance_based_chromosome(total_rows, total_cols, df, anomaly, seed):
+    """Create chromosome with points at specific distance ranges from anomaly."""
     r = random.randint(util.MIN_ROWS_AMOUNT, min(util.MAX_ROWS_AMOUNT, total_rows))
     c = random.randint(util.MIN_COLS_AMOUNT, min(util.MAX_COLS_AMOUNT, total_cols))
 
-    # Random selection of rows
-    rows = random.sample(range(total_rows), r)
+    # Calculate distances to all points
+    anomaly_vec = anomaly.values.flatten()
+    distances = []
+    for idx in range(total_rows):
+        row_vec = df.iloc[idx].values
+        dist = np.linalg.norm(row_vec - anomaly_vec)
+        distances.append((dist, idx))
+
+    distances.sort()
+
+    # Select from different distance ranges based on seed
+    ranges = len(distances) // 3
+    if seed % 3 == 0:  # Close points
+        candidates = [idx for _, idx in distances[:ranges]]
+    elif seed % 3 == 1:  # Medium distance points
+        candidates = [idx for _, idx in distances[ranges:2 * ranges]]
+    else:  # Far points
+        candidates = [idx for _, idx in distances[2 * ranges:]]
+
+    rows = random.sample(candidates, min(r, len(candidates)))
+    if len(rows) < r:  # Fill remaining with random
+        remaining = set(range(total_rows)) - set(rows)
+        rows.extend(random.sample(list(remaining), r - len(rows)))
 
     return Chromosome(rows, c, total_rows, total_cols)
 
 
+def create_feature_spread_chromosome(total_rows, total_cols, seed):
+    """Create chromosome with diverse feature combinations."""
+    r = random.randint(util.MIN_ROWS_AMOUNT, min(util.MAX_ROWS_AMOUNT, total_rows))
+    # Vary column selection based on seed
+    c_options = list(range(util.MIN_COLS_AMOUNT, min(util.MAX_COLS_AMOUNT, total_cols) + 1))
+    c = c_options[seed % len(c_options)]
+    rows = random.sample(range(total_rows), r)
+    return Chromosome(rows, c, total_rows, total_cols)
+
+
+def create_diverse_population(total_rows, total_cols, population_size, df, anomaly):
+    """Create initial population with diverse strategies."""
+    population = []
+    seen_combinations = set()
+    strategies = ['random', 'distance_based', 'feature_spread']
+
+    for i in range(population_size):
+        strategy = strategies[i % len(strategies)]
+
+        if strategy == 'distance_based':
+            chromosome = create_distance_based_chromosome(total_rows, total_cols, df, anomaly, i)
+        elif strategy == 'feature_spread':
+            chromosome = create_feature_spread_chromosome(total_rows, total_cols, i)
+        else:
+            chromosome = create_random_chromosome(total_rows, total_cols)
+
+        # Ensure uniqueness with more attempts
+        row_comb = tuple(sorted(chromosome.rows))
+        attempts = 0
+        while row_comb in seen_combinations and attempts < 50:
+            chromosome = create_random_chromosome(total_rows, total_cols)
+            row_comb = tuple(sorted(chromosome.rows))
+            attempts += 1
+
+        seen_combinations.add(row_comb)
+        population.append(chromosome)
+
+    return population
+
+
 def evaluate_chromosome(chromosome, df, anomaly):
-    """Evaluate chromosome fitness (lower distance = higher fitness)."""
+    """FIXED: Evaluate chromosome fitness (higher AFES = higher fitness)."""
     if chromosome.fitness is not None:
         return chromosome.fitness
 
     container = chromosome.to_subset_container(df, anomaly)
-    distance = container.get_euclidian_distance()
 
-    chromosome.distance = distance
-    chromosome.fitness = -distance  # Negative distance for maximization
+    afes_score = container.get_explanation_score()
 
+    chromosome.distance = afes_score  # Store AFES score
+    chromosome.fitness = afes_score  # Higher AFES = higher fitness
     return chromosome.fitness
 
 
+def diversity_tournament_selection(population, tournament_size=5):
+    """Tournament selection with diversity consideration."""
+    tournament = random.sample(population, min(tournament_size, len(population)))
+
+    # 70% fitness, 30% diversity consideration
+    if random.random() < 0.7:
+        return max(tournament, key=lambda x: x.fitness)
+    else:
+        # Select based on uniqueness of row combination
+        unique_combinations = {}
+        for chrom in tournament:
+            key = tuple(sorted(chrom.rows))
+            if key not in unique_combinations:
+                unique_combinations[key] = []
+            unique_combinations[key].append(chrom)
+
+        # Prefer less common combinations
+        rarest_key = min(unique_combinations.keys(), key=lambda k: len(unique_combinations[k]))
+        return max(unique_combinations[rarest_key], key=lambda x: x.fitness)
+
+
 def tournament_selection(population, tournament_size=3):
-    """Select parent using tournament selection."""
+    """Standard tournament selection (kept for compatibility)."""
     tournament = random.sample(population, min(tournament_size, len(population)))
     return max(tournament, key=lambda x: x.fitness)
+
+
+def local_search(chromosome, df, anomaly, max_iterations=3):
+    """Simple local search to improve chromosome."""
+    current_fitness = evaluate_chromosome(chromosome, df, anomaly)
+
+    for _ in range(max_iterations):
+        # Try small modifications
+        backup_rows = chromosome.rows.copy()
+        backup_cols = chromosome.cols
+
+        # Try swapping one row
+        if len(chromosome.rows) > 0:
+            old_row = random.choice(list(chromosome.rows))
+            available_rows = set(range(chromosome.total_rows)) - chromosome.rows
+            if available_rows:
+                new_row = random.choice(list(available_rows))
+                chromosome.rows.remove(old_row)
+                chromosome.rows.add(new_row)
+
+                chromosome.fitness = None
+                new_fitness = evaluate_chromosome(chromosome, df, anomaly)
+
+                if new_fitness <= current_fitness:  # Revert if worse
+                    chromosome.rows = backup_rows
+                    chromosome.cols = backup_cols
+                    chromosome.fitness = current_fitness
+                else:
+                    current_fitness = new_fitness
+
+    return chromosome
 
 
 def crossover(parent1, parent2):
@@ -93,101 +211,122 @@ def crossover(parent1, parent2):
     return child1, child2
 
 
-def mutate(chromosome, mutation_rate=0.1):
-    """Mutate chromosome by changing row selection or column count."""
-    if random.random() < mutation_rate:
-        if random.random() < 0.7:  # 70% chance to mutate rows
-            # Row mutation: add/remove/replace a row
-            available_rows = set(range(chromosome.total_rows)) - chromosome.rows
+def enhanced_crossover(parent1, parent2, df, anomaly):
+    """Crossover with local optimization."""
+    child1, child2 = crossover(parent1, parent2)
 
-            if len(chromosome.rows) > util.MIN_ROWS_AMOUNT and available_rows:
-                if random.random() < 0.5:  # Replace a row
-                    old_row = random.choice(list(chromosome.rows))
-                    new_row = random.choice(list(available_rows))
-                    chromosome.rows.remove(old_row)
-                    chromosome.rows.add(new_row)
-                elif len(chromosome.rows) < util.MAX_ROWS_AMOUNT:  # Add a row
-                    new_row = random.choice(list(available_rows))
-                    chromosome.rows.add(new_row)
-                else:  # Remove a row
-                    old_row = random.choice(list(chromosome.rows))
-                    chromosome.rows.remove(old_row)
-        else:  # 30% chance to mutate column count
-            chromosome.cols = max(util.MIN_COLS_AMOUNT,
-                                  min(util.MAX_COLS_AMOUNT,
-                                      chromosome.cols + random.randint(-1, 1)))
+    # Apply local search to children
+    child1 = local_search(child1, df, anomaly)
+    child2 = local_search(child2, df, anomaly)
 
-    # Reset fitness after mutation
+    return child1, child2
+
+
+def adaptive_mutate(chromosome, generation, max_generations, base_rate=0.15):
+    """Mutation rate that decreases over generations."""
+    # Start high, decrease over time
+    adaptive_rate = base_rate * (1 - generation / max_generations) + 0.05
+
+    if random.random() < adaptive_rate:
+        # Enhanced mutation with multiple changes
+        num_mutations = random.randint(1, 2)  # 1-2 mutations per event
+
+        for _ in range(num_mutations):
+            if random.random() < 0.7:  # Row mutation
+                available_rows = set(range(chromosome.total_rows)) - chromosome.rows
+
+                if len(chromosome.rows) > util.MIN_ROWS_AMOUNT and available_rows:
+                    mutation_type = random.choice(['replace', 'add', 'remove'])
+
+                    if mutation_type == 'replace' or (
+                            mutation_type == 'add' and len(chromosome.rows) >= util.MAX_ROWS_AMOUNT):
+                        old_row = random.choice(list(chromosome.rows))
+                        new_row = random.choice(list(available_rows))
+                        chromosome.rows.remove(old_row)
+                        chromosome.rows.add(new_row)
+                    elif mutation_type == 'add' and len(chromosome.rows) < util.MAX_ROWS_AMOUNT:
+                        new_row = random.choice(list(available_rows))
+                        chromosome.rows.add(new_row)
+                    elif mutation_type == 'remove':
+                        old_row = random.choice(list(chromosome.rows))
+                        chromosome.rows.remove(old_row)
+            else:  # Column mutation
+                chromosome.cols = max(util.MIN_COLS_AMOUNT,
+                                      min(util.MAX_COLS_AMOUNT,
+                                          chromosome.cols + random.randint(-1, 1)))
+
     chromosome.fitness = None
     chromosome.distance = None
-
     return chromosome
+
+
+def mutate(chromosome, mutation_rate=0.1):
+    """Standard mutate function (kept for compatibility)."""
+    return adaptive_mutate(chromosome, 0, 1, mutation_rate)
 
 
 def get_sub_dfs(df, anomaly, top_n=10, num_samples=1000):
     """
-    Genetic Algorithm for identifying top-N subsets most similar to the given anomaly instance.
-
-    Args:
-        df (pd.DataFrame): Input dataset.
-        anomaly (pd.Series): The anomaly to compare subsets against.
-        top_n (int): Number of top subsets to return.
-        num_samples (int): Used to determine population size and generations.
-
-    Returns:
-        list of SubsetContainer: Top-N subsets with lowest similarity (Euclidean distance).
+    Genetic Algorithm for identifying top-N subsets with highest AFES scores.
     """
-    print(f"▶️ Running Genetic Algorithm at {datetime.now().strftime('%H:%M:%S')}")
 
-    # GA Parameters
-    population_size = max(50, num_samples // 20)  # Scale with num_samples
-    generations = max(25, num_samples // 40)  # Scale with num_samples
-    mutation_rate = 0.15
-    elitism_size = max(5, population_size // 10)
+    # Enhanced parameters for better quality
+    population_size = max(100, num_samples // 15)
+    generations = max(50, num_samples // 20)
+    elitism_size = max(10, population_size // 8)
 
     total_rows = df.shape[0]
     total_cols = len(df.columns)
 
-    # Initialize population
-    population = []
-    seen_combinations = set()
+    # Better initialization with diverse strategies
+    population = create_diverse_population(total_rows, total_cols, population_size, df, anomaly)
 
-    for _ in range(population_size):
-        chromosome = create_random_chromosome(total_rows, total_cols)
-        row_comb = tuple(sorted(chromosome.rows))
-
-        # Ensure diversity in initial population
-        attempts = 0
-        while row_comb in seen_combinations and attempts < 10:
-            chromosome = create_random_chromosome(total_rows, total_cols)
-            row_comb = tuple(sorted(chromosome.rows))
-            attempts += 1
-
-        seen_combinations.add(row_comb)
+    # Evaluate initial population
+    for chromosome in population:
         evaluate_chromosome(chromosome, df, anomaly)
-        population.append(chromosome)
+
+    best_fitness_history = []
+    stagnation_counter = 0
 
     # Evolution loop
     for generation in range(generations):
-        # Sort population by fitness (higher is better)
+        # Sort population by fitness
         population.sort(key=lambda x: x.fitness, reverse=True)
+        current_best = population[0].fitness
+        best_fitness_history.append(current_best)
+
+        # Check for stagnation
+        if len(best_fitness_history) > 10:
+            recent_improvement = best_fitness_history[-1] - best_fitness_history[-10]
+            if recent_improvement < 0.001:
+                stagnation_counter += 1
+            else:
+                stagnation_counter = 0
+
+        # Apply diversity injection if stagnated
+        if stagnation_counter > 5:
+            replace_count = population_size // 5
+            for i in range(replace_count):
+                idx = -(i + 1)
+                population[idx] = create_random_chromosome(total_rows, total_cols)
+                evaluate_chromosome(population[idx], df, anomaly)
+            stagnation_counter = 0
 
         # Create next generation
         new_population = []
 
-        # Elitism: Keep best individuals
+        # Elitism: Keep best individuals (no change needed)
         new_population.extend(population[:elitism_size])
 
         # Generate offspring
         while len(new_population) < population_size:
-            parent1 = tournament_selection(population)
-            parent2 = tournament_selection(population)
+            parent1 = diversity_tournament_selection(population)
+            parent2 = diversity_tournament_selection(population)
 
-            child1, child2 = crossover(parent1, parent2)
+            child1, child2 = enhanced_crossover(parent1, parent2, df, anomaly)
 
-            # Mutation
-            child1 = mutate(child1, mutation_rate)
-            child2 = mutate(child2, mutation_rate)
+            child1 = adaptive_mutate(child1, generation, generations)
+            child2 = adaptive_mutate(child2, generation, generations)
 
             # Evaluate children
             evaluate_chromosome(child1, df, anomaly)
@@ -195,7 +334,6 @@ def get_sub_dfs(df, anomaly, top_n=10, num_samples=1000):
 
             new_population.extend([child1, child2])
 
-        # Trim to exact population size
         population = new_population[:population_size]
 
     # Final evaluation and sorting
@@ -206,14 +344,10 @@ def get_sub_dfs(df, anomaly, top_n=10, num_samples=1000):
     for i in range(min(top_n, len(population))):
         chromosome = population[i]
         container = chromosome.to_subset_container(df, anomaly)
-        # Re-evaluate to ensure we have the container with distance
-        distance = container.get_euclidian_distance()
-        top_subsets.append((distance, container))
+        afes_score = container.get_explanation_score()
+        top_subsets.append((afes_score, container))
 
-    # Sort by distance (lower is better)
-    top_subsets.sort(key=lambda x: x[0])
-
-    print(f"✅ Genetic Algorithm completed at {datetime.now().strftime('%H:%M:%S')}")
-    print(f"Best fitness: {population[0].fitness:.4f}, Best distance: {-population[0].fitness:.4f}")
+    # Sort by AFES score descending (highest first)
+    top_subsets.sort(key=lambda x: x[0], reverse=True)
 
     return [subset for _, subset in top_subsets]
