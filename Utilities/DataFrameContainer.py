@@ -12,10 +12,11 @@ import matplotlib.pyplot as plt
 
 class DataFrameContainer:
     def __init__(self):
-        # file_path = constants.PROJECT_PATH + "\Data\house_prices_train.csv"
-        file_path = constants.PROJECT_PATH + "\Data\AmesHousing.csv"
+        # file_path = constants.PROJECT_PATH + "\Data\AmesHousing.csv"
+        file_path = constants.PROJECT_PATH + "\Data\creditcard.csv"
+        # file_path = constants.PROJECT_PATH + "\Data\cybersecurity_intrusion_data.csv"
         df = pd.read_csv(file_path)
-        df = df.sample(n=300, random_state=42)
+        df = df.sample(n=8000, random_state=20)
         selected_columns = constants.COLUMNS     # Select specific columns from the DataFrame
         self.original_df = pd.DataFrame(df[selected_columns])
 
